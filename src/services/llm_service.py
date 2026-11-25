@@ -1,11 +1,10 @@
 
-from google import genai
-from google.genai import types
+from openai import OpenAI
 import time
 
 from src.core.config import (
-    GEMINI_API_KEY,
-    GEMINI_MODEL,
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_MODEL,
     validate_config,
 )
 
@@ -15,42 +14,47 @@ def generate_response(
     system_instruction: str,
 ) -> str:
     """
-    Sends conversation history to Gemini and returns its response.
+    Sends conversation history to DeepSeek and returns its response.
     """
 
     validate_config()
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    print(f"[Gemini] Using model: {GEMINI_MODEL}", flush=True)
+    client = OpenAI(
+        api_key=DEEPSEEK_API_KEY,
+        base_url="https://api.deepseek.com",
+    )
 
-    contents = [
-        {
-            "role": "user" if message["role"] == "user" else "model",
-            "parts": [{"text": message["content"]}],
-        }
-        for message in history
+    print(f"[DeepSeek] Using model: {DEEPSEEK_MODEL}", flush=True)
+
+    messages = [
+        {"role": "system", "content": system_instruction}
     ]
+
+    for message in history:
+        messages.append({
+            "role": message["role"],
+            "content": message["content"],
+        })
 
     start_time = time.perf_counter()
 
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            max_output_tokens=1000,
-            temperature=0.7,
-        ),
+    response = client.chat.completions.create(
+        model=DEEPSEEK_MODEL,
+        messages=messages,
+        max_tokens=1000,
+        temperature=0.7,
     )
 
     elapsed = time.perf_counter() - start_time
 
     print(
-        f"[Gemini] Response received in {elapsed:.3f} seconds",
+        f"[DeepSeek] Response received in {elapsed:.3f} seconds",
         flush=True
     )
 
-    if not response.text:
-        raise RuntimeError("Gemini returned an empty response.")
+    answer = response.choices[0].message.content
 
-    return response.text
+    if not answer:
+        raise RuntimeError("DeepSeek returned an empty response.")
+
+    return answer
