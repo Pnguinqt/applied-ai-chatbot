@@ -9,10 +9,13 @@ from src.services.safety_service import check_input_safety
 import streamlit as st
 
 # ----------------------------------------------------------------- config
-st.set_page_config(page_title="TechBuddy", page_icon="🖥️", layout="centered")
-
-
-
+# ----------------------------------------------------------------- config (Lines 10-44)
+st.set_page_config(
+    page_title="TechBuddy • Hardware Assistant",
+    page_icon="🖥️",
+    layout="centered",
+    initial_sidebar_state="expanded",
+)
 
 SYSTEM_PROMPT = """You are TechBuddy, a friendly expert assistant specializing ONLY in computer hardware.
 
@@ -37,65 +40,257 @@ GENERAL RESPONSE RULES:
 
 
 CARDS = [
-    ("🩺", "Diagnose my PC",
-     "Describe symptoms like crashes, freezes or slowdowns and get a step-by-step diagnosis.",
+    ("🩺", "#eef2ff", "#4f46e5", "Diagnose my PC",
+     "Describe crashes, freezes, or slowdowns and get a step-by-step hardware diagnosis.",
      "Run Diagnosis",
      "My PC keeps freezing and crashing randomly. Help me diagnose the hardware cause."),
-    ("🌡️", "Overheating issues?",
-     "Check CPU/GPU temperatures, fan behavior and airflow, and learn how to cool things down.",
+    ("🌡️", "#fff1f2", "#e11d48", "Overheating issues?",
+     "Check CPU/GPU temps, fan curves, and airflow to stop thermal throttling.",
      "Check Thermals",
      "My computer is running hot and the fans are loud. How do I find and fix the cause?"),
-    ("⚡", "What should I upgrade?",
-     "Find the best upgrade for your budget: RAM, SSD, GPU or CPU, with compatibility tips.",
+    ("⚡", "#fefce8", "#ca8a04", "What should I upgrade?",
+     "Find the best upgrade for your budget—RAM, SSD, GPU, or CPU—with compatibility tips.",
      "Get Upgrade Advice",
      "What is the best hardware upgrade to make my older PC faster? Ask me what you need to know."),
 ]
 
-# ----------------------------------------------------------------- state
+# ----------------------------------------------------------------- state (Lines 47-55)
 ss = st.session_state
-ss.setdefault("messages", [])
+if "conversations" not in ss:
+    ss.conversations = {}  # {chat_id: {"title": str, "messages": list, "updated": str}}
+if "active_chat_id" not in ss:
+    first_id = str(int(time.time() * 1000))
+    ss.conversations[first_id] = {"title": "New Chat", "messages": [], "updated": datetime.now().strftime("%I:%M %p")}
+    ss.active_chat_id = first_id
+
 ss.setdefault("pending", None)
 ss.setdefault("user_name", "there")
 
 
-# ----------------------------------------------------------------- styling
+def current_messages():
+    return ss.conversations[ss.active_chat_id]["messages"]
+
+
+def start_new_chat():
+    # Reuse current chat if it's already empty
+    if not current_messages():
+        return
+    new_id = str(int(time.time() * 1000))
+    ss.conversations[new_id] = {
+        "title": "New Chat",
+        "messages": [],
+        "updated": datetime.now().strftime("%I:%M %p"),
+    }
+    ss.active_chat_id = new_id
+    ss.pending = None
+
+
+# ----------------------------------------------------------------- styling (Lines 58-93)
 st.markdown(
     """
 <style>
-#MainMenu, footer, header {visibility: hidden;}
-.stApp {background: linear-gradient(135deg,#f4f5fb 0%,#ffffff 45%,#f3f1fb 100%);}
-.block-container {max-width: 860px; padding-top: 1.2rem; padding-bottom: 7rem;}
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
 
-/* pill buttons */
+/* Keep sidebar toggle visible while hiding deploy/menu clutter */
+#MainMenu, footer, [data-testid="stDecoration"], [data-testid="stAppDeployButton"] {
+    visibility: hidden;
+    display: none;
+}
+header[data-testid="stHeader"] {
+    background: transparent !important;
+}
+[data-testid="stExpandSidebarButton"],
+[data-testid="collapsedControl"] {
+    visibility: visible !important;
+    display: flex !important;
+}
+
+html, body, [class*="css"] {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+code, pre {
+    font-family: 'JetBrains Mono', monospace !important;
+}
+.stApp {
+    background: radial-gradient(circle at 15% 10%, #eef0ff 0%, #f8f9fc 40%, #f2effb 100%);
+    color: #181a24;
+}
+.block-container {
+    max-width: 820px;
+    padding-top: 1.2rem;
+    padding-bottom: 7.5rem;
+}
+
+/* Sidebar Styling */
+[data-testid="stSidebar"] {
+    background: rgba(250, 250, 254, 0.94);
+    border-right: 1px solid #e6e8f2;
+}
+[data-testid="stSidebar"] .stButton > button {
+    justify-content: flex-start;
+    text-align: left;
+    border-radius: 12px;
+    padding: 0.45rem 0.75rem;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Top Bar & Pill Buttons */
 .stButton > button, .stDownloadButton > button, [data-testid="stPopover"] > div > button {
-    border-radius: 999px; border: 1px solid #e6e7ee; background: #fff;
-    font-size: 0.78rem; font-weight: 600; color: #1f2230; padding: .25rem .9rem;
-    box-shadow: 0 1px 4px rgba(20,20,60,.05);
+    border-radius: 999px;
+    border: 1px solid #e2e4f0;
+    background: rgba(255, 255, 255, 0.88);
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #2b2f42;
+    padding: 0.35rem 0.95rem;
+    box-shadow: 0 2px 6px rgba(24, 26, 36, 0.04);
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
-.stButton > button:hover, .stDownloadButton > button:hover {border-color:#8b8fd8; color:#4a4fc0;}
+.stButton > button:hover, .stDownloadButton > button:hover, [data-testid="stPopover"] > div > button:hover {
+    border-color: #6366f1;
+    color: #4f46e5;
+    background: #ffffff;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.14);
+}
 
-/* welcome */
-.tb-badge {width:46px;height:46px;border-radius:50%;margin:3.2rem auto 1.1rem;display:flex;
-    align-items:center;justify-content:center;font-size:1.3rem;background:#fff;
-    box-shadow:0 4px 16px rgba(80,80,160,.18);}
-.tb-hello {text-align:center;font-size:2rem;font-weight:600;color:#1c1e2b;margin:0;}
-.tb-hello span {color:#6b6e80;}
-.tb-sub {text-align:center;color:#6b6e80;font-size:.85rem;margin:.4rem 0 2.2rem;}
+/* Status Pill in Header */
+.tb-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #4b5563;
+    background: rgba(255, 255, 255, 0.85);
+    border: 1px solid #e5e7eb;
+    padding: 0.32rem 0.8rem;
+    border-radius: 999px;
+}
+.tb-status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #10b981;
+    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
+}
 
-/* suggestion cards */
+/* Welcome Hero */
+.tb-badge {
+    width: 54px;
+    height: 54px;
+    border-radius: 16px;
+    margin: 2.2rem auto 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    background: linear-gradient(135deg, #ffffff 0%, #eef2ff 100%);
+    border: 1px solid #e0e7ff;
+    box-shadow: 0 10px 25px -5px rgba(79, 70, 229, 0.18);
+}
+.tb-hello {
+    text-align: center;
+    font-size: 2.15rem;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    color: #141622;
+    margin: 0;
+}
+.tb-hello span {
+    background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+.tb-sub {
+    text-align: center;
+    color: #5f6478;
+    font-size: 0.94rem;
+    margin: 0.45rem 0 2.2rem;
+}
+
+/* Suggestion Cards */
 [data-testid="stVerticalBlockBorderWrapper"] {
-    border-radius: 16px; border: 1px solid #ececf3; background: rgba(255,255,255,.75);
-    box-shadow: 0 2px 10px rgba(20,20,60,.04);
+    border-radius: 18px !important;
+    border: 1px solid #e6e8f2 !important;
+    background: rgba(255, 255, 255, 0.88) !important;
+    box-shadow: 0 4px 16px rgba(20, 22, 36, 0.04);
+    transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+    padding: 0.2rem;
 }
-.tb-card-icon {font-size:1.1rem;margin-bottom:.5rem;}
-.tb-card-title {font-weight:600;font-size:.95rem;color:#1c1e2b;margin-bottom:.35rem;}
-.tb-card-desc {font-size:.74rem;color:#8a8d9e;line-height:1.45;min-height:3.2rem;margin-bottom:.6rem;}
+[data-testid="stVerticalBlockBorderWrapper"]:hover {
+    transform: translateY(-4px);
+    border-color: #c7d2fe !important;
+    box-shadow: 0 12px 24px -6px rgba(79, 70, 229, 0.12);
+}
+.tb-card-icon-wrap {
+    width: 38px;
+    height: 38px;
+    border-radius: 11px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.15rem;
+    margin-bottom: 0.75rem;
+}
+.tb-card-title {
+    font-weight: 700;
+    font-size: 0.98rem;
+    color: #181a24;
+    margin-bottom: 0.35rem;
+}
+.tb-card-desc {
+    font-size: 0.8rem;
+    color: #64697d;
+    line-height: 1.5;
+    min-height: 3.6rem;
+    margin-bottom: 0.8rem;
+}
 
-/* chat */
-[data-testid="stChatMessage"] {background: rgba(255,255,255,.8); border:1px solid #ececf3;
-    border-radius:16px; padding:.8rem 1rem;}
-[data-testid="stChatInput"] {border-radius: 999px;}
-[data-testid="stChatInput"] textarea {font-size:.9rem;}
+/* Chat Messages - Distinct User vs Assistant */
+[data-testid="stChatMessage"] {
+    border-radius: 18px;
+    padding: 1rem 1.2rem;
+    margin-bottom: 0.75rem;
+    box-shadow: 0 2px 10px rgba(20, 22, 36, 0.03);
+}
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
+    background: #eef2ff;
+    border: 1px solid #dde4ff;
+}
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) {
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid #e6e8f2;
+}
+
+/* FIXED Chat Input Bar (No double-border overlap!) */
+[data-testid="stBottom"] > div {
+    background: linear-gradient(to top, rgba(244, 245, 251, 0.96) 70%, rgba(244, 245, 251, 0));
+}
+[data-testid="stChatInput"] {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+[data-testid="stChatInput"] > div {
+    border-radius: 6px !important;
+    border: 1px solid #d8dcf0 !important;
+    background: #ffffff !important;
+    box-shadow: 0 8px 24px -4px rgba(24, 26, 36, 0.08) !important;
+    padding: 0.5rem 0.65rem !important;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+[data-testid="stChatInput"] > div:focus-within {
+    border-color: #6366f1 !important;
+    box-shadow: 0 8px 24px -4px rgba(99, 102, 241, 0.2) !important;
+}
+[data-testid="stChatInput"] textarea {
+    font-size: 0.92rem !important;
+    background: transparent !important;
+}
 </style>
 """,
     unsafe_allow_html=True,
@@ -252,6 +447,7 @@ def stream_reply(history):
 
 
 # ----------------------------------------------------------------- top bar
+# ----------------------------------------------------------------- top bar & sidebar (Lines 219-302)
 def greeting() -> str:
     h = datetime.now().hour
     return "Good Morning" if h < 12 else "Good Afternoon" if h < 18 else "Good Evening"
@@ -259,73 +455,140 @@ def greeting() -> str:
 
 def transcript() -> str:
     lines = ["TechBuddy chat", datetime.now().strftime("%Y-%m-%d %H:%M"), ""]
-    for m in ss.messages:
+    for m in current_messages():
         who = "You" if m["role"] == "user" else "TechBuddy"
         lines += [f"{who}: {m['content']}", ""]
     return "\n".join(lines)
 
 
-left, mid, right = st.columns([1, 6, 3])
-with left:
-    with st.popover("🔍"):
-        q = st.text_input("Search this chat", placeholder="Search…", label_visibility="collapsed")
+# --- Sidebar: Chat History Navigation ---
+with st.sidebar:
+    st.markdown("### 🖥️ TechBuddy")
+    if st.button("＋ New Chat", key="sb_new_chat", use_container_width=True):
+        start_new_chat()
+        st.rerun()
+
+    # Only list conversations that actually have messages
+    saved_convos = [
+        (cid, convo)
+        for cid, convo in reversed(list(ss.conversations.items()))
+        if convo["messages"]
+    ]
+
+    if saved_convos:
+        st.markdown("---")
+        st.caption("CHAT HISTORY")
+        for cid, convo in saved_convos:
+            is_active = cid == ss.active_chat_id
+            icon = "💬" if is_active else "📄"
+            label = f"{icon} {convo['title']}"
+            col_chat, col_del = st.columns([5, 1])
+            with col_chat:
+                if st.button(
+                    label,
+                    key=f"nav_{cid}",
+                    use_container_width=True,
+                    type="primary" if is_active else "secondary",
+                ):
+                    ss.active_chat_id = cid
+                    ss.pending = None
+                    st.rerun()
+            with col_del:
+                if st.button("✕", key=f"del_{cid}", help="Delete chat"):
+                    del ss.conversations[cid]
+                    if ss.active_chat_id == cid:
+                        # Switch to most recent remaining chat, or start a fresh empty one
+                        if ss.conversations:
+                            ss.active_chat_id = next(reversed(ss.conversations))
+                        else:
+                            new_id = str(int(time.time() * 1000))
+                            ss.conversations[new_id] = {
+                                "title": "New Chat",
+                                "messages": [],
+                                "updated": datetime.now().strftime("%I:%M %p"),
+                            }
+                            ss.active_chat_id = new_id
+                    st.rerun()
+
+
+# --- Main Top Bar ---
+c_brand, c_search, c_settings, c_share = st.columns([3.2, 1.3, 1.3, 1.4])
+with c_brand:
+    st.markdown(
+        '<div class="tb-status-pill"><span class="tb-status-dot"></span>TechBuddy AI</div>',
+        unsafe_allow_html=True,
+    )
+with c_search:
+    with st.popover("🔍 Find", use_container_width=True):
+        q = st.text_input("Search this chat", placeholder="Search messages…", label_visibility="collapsed")
         if q:
-            hits = [m["content"] for m in ss.messages if q.lower() in m["content"].lower()]
+            hits = [m["content"] for m in current_messages() if q.lower() in m["content"].lower()]
             if hits:
                 for h in hits[:5]:
                     st.caption(h[:140] + ("…" if len(h) > 140 else ""))
             else:
-                st.caption("No matches.")
-with mid:
-    c1, c2 = st.columns([1.3, 5])
-    with c1:
-        if st.button("＋ New Chat"):
-            ss.messages, ss.pending = [], None
-            st.rerun()
-    with c2:
-        with st.popover("⚙️ Settings"):
-            st.caption("TechBuddy AI Assistant")
-            st.caption("Powered by DeepSeek")
-            st.caption("Specialized in computer hardware assistance.")
-with right:
-    st.download_button("⬆ Share", transcript(), file_name="techbuddy_chat.txt",
-                       disabled=not ss.messages)
+                st.caption("No matches found.")
+with c_settings:
+    with st.popover("⚙️ Info", use_container_width=True):
+        st.markdown("**TechBuddy AI Assistant**")
+        st.caption("Engine: DeepSeek + Offline Hardware KB")
+        st.caption("Scope: PC/Laptop Hardware & Diagnostics")
+with c_share:
+    st.download_button(
+        "⬆ Export",
+        transcript(),
+        file_name="techbuddy_chat.txt",
+        disabled=not current_messages(),
+        use_container_width=True,
+    )
 
 # ----------------------------------------------------------------- welcome screen
-if not ss.messages and ss.pending is None:
-    st.markdown('<div class="tb-badge">✨</div>', unsafe_allow_html=True)
+messages = current_messages()
+if not messages and ss.pending is None:
+    st.markdown('<div class="tb-badge">🖥️</div>', unsafe_allow_html=True)
     st.markdown(
-    f'<h1 class="tb-hello">{greeting()}, <span>Buddy!</span></h1>',
-    unsafe_allow_html=True,
-)
-    st.markdown('<p class="tb-sub">Hey there! What hardware problem can I help you fix today?</p>',
-                unsafe_allow_html=True)
-    cols = st.columns(3)
-    for col, (icon, title, desc, btn, prompt_text) in zip(cols, CARDS):
+        f'<h1 class="tb-hello">{greeting()}, <span>Buddy!</span></h1>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<p class="tb-sub">Tell me your specs or symptoms—let’s diagnose, cool down, or upgrade your rig.</p>',
+        unsafe_allow_html=True,
+    )
+    cols = st.columns(3, gap="medium")
+    for col, (icon, bg_color, fg_color, title, desc, btn, prompt_text) in zip(cols, CARDS):
         with col, st.container(border=True):
             st.markdown(
-                f'<div class="tb-card-icon">{icon}</div><div class="tb-card-title">{title}</div>'
-                f'<div class="tb-card-desc">{desc}</div>', unsafe_allow_html=True)
+                f'<div class="tb-card-icon-wrap" style="background:{bg_color}; color:{fg_color};">{icon}</div>'
+                f'<div class="tb-card-title">{title}</div>'
+                f'<div class="tb-card-desc">{desc}</div>',
+                unsafe_allow_html=True,
+            )
             if st.button(btn, key=f"card_{title}", use_container_width=True):
                 ss.pending = prompt_text
                 st.rerun()
 
 # ----------------------------------------------------------------- chat history
-for m in ss.messages:
+for m in messages:
     with st.chat_message(m["role"], avatar="🧑‍💻" if m["role"] == "user" else "🖥️"):
         st.markdown(m["content"])
 
 # ----------------------------------------------------------------- input + response
-typed = st.chat_input("Describe your computer problem…")
+typed = st.chat_input("Describe your PC issue, temps, or part specs…")
 if typed:
     ss.pending = typed
 
 if ss.pending:
     prompt, ss.pending = ss.pending, None
-    ss.messages.append({"role": "user", "content": prompt})
+    convo = ss.conversations[ss.active_chat_id]
+
+    # Auto-title the sidebar item from the first user prompt
+    if not convo["messages"]:
+        convo["title"] = prompt[:28] + ("…" if len(prompt) > 28 else "")
+
+    convo["messages"].append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar="🧑‍💻"):
         st.markdown(prompt)
     with st.chat_message("assistant", avatar="🖥️"):
-        reply = st.write_stream(stream_reply(ss.messages))
-    ss.messages.append({"role": "assistant", "content": reply})
+        reply = st.write_stream(stream_reply(convo["messages"]))
+    convo["messages"].append({"role": "assistant", "content": reply})
     st.rerun()
