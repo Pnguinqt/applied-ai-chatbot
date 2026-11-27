@@ -9,7 +9,6 @@ from src.services.safety_service import check_input_safety
 import streamlit as st
 
 # ----------------------------------------------------------------- config
-# ----------------------------------------------------------------- config (Lines 10-44)
 st.set_page_config(
     page_title="TechBuddy • Hardware Assistant",
     page_icon="🖥️",
@@ -54,7 +53,6 @@ CARDS = [
      "What is the best hardware upgrade to make my older PC faster? Ask me what you need to know."),
 ]
 
-# ----------------------------------------------------------------- state (Lines 47-55)
 ss = st.session_state
 if "conversations" not in ss:
     ss.conversations = {}  # {chat_id: {"title": str, "messages": list, "updated": str}}
@@ -84,8 +82,6 @@ def start_new_chat():
     ss.active_chat_id = new_id
     ss.pending = None
 
-
-# ----------------------------------------------------------------- styling (Lines 58-93)
 st.markdown(
     """
 <style>
@@ -447,7 +443,6 @@ def stream_reply(history):
 
 
 # ----------------------------------------------------------------- top bar
-# ----------------------------------------------------------------- top bar & sidebar (Lines 219-302)
 def greeting() -> str:
     h = datetime.now().hour
     return "Good Morning" if h < 12 else "Good Afternoon" if h < 18 else "Good Evening"
