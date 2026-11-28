@@ -3,6 +3,7 @@ import os
 import re
 from datetime import datetime
 import time
+from fpdf import FPDF
 from src.services.llm_service import generate_response
 from src.services.safety_service import check_input_safety
 
@@ -63,6 +64,20 @@ if "active_chat_id" not in ss:
 
 ss.setdefault("pending", None)
 ss.setdefault("user_name", "there")
+ss.setdefault("diagnostic_report", None)
+
+def start_new_chat():
+    if not current_messages():
+        return
+    new_id = str(int(time.time() * 1000))
+    ss.conversations[new_id] = {
+        "title": "New Chat",
+        "messages": [],
+        "updated": datetime.now().strftime("%I:%M %p"),
+    }
+    ss.active_chat_id = new_id
+    ss.pending = None
+    ss.diagnostic_report = None
 
 
 def current_messages():
@@ -455,6 +470,152 @@ def transcript() -> str:
         lines += [f"{who}: {m['content']}", ""]
     return "\n".join(lines)
 
+# ----------------------------------------------------------------- Smart Diagnostic Report
+REPORT_PROMPT = """Analyze the hardware troubleshooting conversation above and generate a clean, structured Smart Diagnostic Report in Markdown with these exact sections:
+
+### 1. Reported Issue & Symptoms
+(Brief summary of the user's problem)
+
+### 2. System Specifications Identified
+(List hardware/OS mentioned, or state "Not yet provided" if missing)
+
+### 3. Likely Root Causes
+(Bullet list of probable hardware causes)
+
+### 4. Recommended Action Plan
+(Numbered step-by-step troubleshooting/fix steps)
+
+### 5. Safety & Technician Notes
+(Relevant ESD, power, thermal, or warranty precautions)
+
+Keep it concise, technical, and ready to export as an official diagnostic sheet."""
+
+
+def generate_diagnostic_markdown(messages: list) -> str:
+    """Uses DeepSeek if online, or builds a clean structured report from the chat if offline."""
+    convo_text = "\n".join(
+        f"{'User' if m['role'] == 'user' else 'TechBuddy'}: {m['content']}"
+        for m in messages
+    )
+    try:
+        report_history = [
+            {"role": "user", "content": f"Conversation log:\n\n{convo_text}\n\n{REPORT_PROMPT}"}
+        ]
+        return generate_response(history=report_history, system_instruction=SYSTEM_PROMPT)
+    except Exception:
+        user_issues = [m["content"] for m in messages if m["role"] == "user"]
+        assistant_notes = [m["content"] for m in messages if m["role"] == "assistant"]
+        symptoms = "\n".join(f"- {u}" for u in user_issues) or "- Not specified"
+        latest_advice = assistant_notes[-1] if assistant_notes else "No diagnostic steps recorded yet."
+        return (
+            "### 1. Reported Issue & Symptoms\n"
+            f"{symptoms}\n\n"
+            "### 2. System Specifications Identified\n"
+            "- Extracted from session log (verify exact model numbers before replacing parts)\n\n"
+            "### 3. Diagnostic Findings & Action Plan\n"
+            f"{latest_advice}\n\n"
+            "### 4. Safety & Technician Notes\n"
+            "- Power off and unplug the PC before opening the case or reseating components.\n"
+            "- Ground yourself to prevent electrostatic discharge (ESD) damage.\n"
+            "- Never open a power supply unit (PSU) enclosure."
+        )
+
+
+def _pdf_safe(text: str) -> str:
+    """Strips Markdown/emojis and escapes PDF literal parentheses/backslashes."""
+    cleaned = re.sub(r"[#*`]", "", text)
+    ascii_text = cleaned.encode("latin-1", "ignore").decode("latin-1").strip()
+    return ascii_text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _wrap_line(text: str, max_chars: int = 86) -> list[str]:
+    """Simple word-wrapper for Helvetica 10pt on an A4 page."""
+    words = text.split()
+    if not words:
+        return []
+    lines, cur = [], words[0]
+    for w in words[1:]:
+        if len(cur) + 1 + len(w) <= max_chars:
+            cur += " " + w
+        else:
+            lines.append(cur)
+            cur = w
+    lines.append(cur)
+    return lines
+
+
+def build_diagnostic_pdf(report_md: str, chat_title: str) -> bytes:
+    """Generates a multi-page styled PDF 1.4 file using pure Python (no external DLLs)."""
+    pages_ops: list[list[str]] = [[]]
+    y = 755.0
+
+    stamp = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+    pages_ops[0].extend([
+        "0.31 0.27 0.90 rg 0 772 595 70 re f",
+        f"BT /F2 16 Tf 1 1 1 rg 40 812 Td ({_pdf_safe('TechBuddy - Smart Diagnostic Report')}) Tj ET",
+        f"BT /F1 9 Tf 0.92 0.93 1 rg 40 793 Td ({_pdf_safe(f'Session: {chat_title}  |  Generated: {stamp}')}) Tj ET",
+    ])
+
+    def ensure_space(needed: float):
+        nonlocal y
+        if y - needed < 50:
+            pages_ops.append([])
+            y = 790.0
+
+    for raw_line in report_md.splitlines():
+        line = raw_line.strip()
+        if not line:
+            y -= 8
+            continue
+
+        if line.startswith("### "):
+            ensure_space(34)
+            y -= 8
+            heading = _pdf_safe(line.replace("### ", ""))
+            pages_ops[-1].append(f"BT /F2 12 Tf 0.31 0.27 0.90 rg 40 {y:.1f} Td ({heading}) Tj ET")
+            y -= 6
+            pages_ops[-1].append(f"0.88 0.91 1.0 RG 1 w 40 {y:.1f} m 555 {y:.1f} l S")
+            y -= 16
+        else:
+            for wline in _wrap_line(line):
+                ensure_space(16)
+                safe = _pdf_safe(wline)
+                pages_ops[-1].append(f"BT /F1 10 Tf 0.09 0.10 0.14 rg 40 {y:.1f} Td ({safe}) Tj ET")
+                y -= 15
+
+    objs: list[bytes] = []
+    n_pages = len(pages_ops)
+    kids = " ".join(f"{5 + i} 0 R" for i in range(n_pages))
+    objs.append(b"<< /Type /Catalog /Pages 2 0 R >>")
+    objs.append(f"<< /Type /Pages /Kids [{kids}] /Count {n_pages} >>".encode("latin-1"))
+    objs.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    objs.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>")
+
+    for i in range(n_pages):
+        content_id = 5 + n_pages + i
+        page_dict = (
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+            f"/Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> "
+            f"/Contents {content_id} 0 R >>"
+        )
+        objs.append(page_dict.encode("latin-1"))
+
+    for ops in pages_ops:
+        stream = "\n".join(ops).encode("latin-1")
+        objs.append(f"<< /Length {len(stream)} >>\nstream\n".encode("latin-1") + stream + b"\nendstream")
+
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for idx, obj in enumerate(objs, start=1):
+        offsets.append(len(out))
+        out.extend(f"{idx} 0 obj\n".encode("latin-1") + obj + b"\nendobj\n")
+
+    xref_pos = len(out)
+    out.extend(f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode("latin-1"))
+    for off in offsets[1:]:
+        out.extend(f"{off:010d} 00000 n \n".encode("latin-1"))
+    out.extend(f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF".encode("latin-1"))
+    return bytes(out)
 
 # --- Sidebar: Chat History Navigation ---
 with st.sidebar:
@@ -507,7 +668,7 @@ with st.sidebar:
 
 
 # --- Main Top Bar ---
-c_brand, c_search, c_settings, c_share = st.columns([3.2, 1.3, 1.3, 1.4])
+c_brand, c_report, c_search, c_settings, c_share = st.columns([2.6, 1.5, 1.2, 1.2, 1.3])
 with c_brand:
     st.markdown(
         '<div class="tb-status-pill"><span class="tb-status-dot"></span>TechBuddy AI</div>',
@@ -536,6 +697,19 @@ with c_share:
         disabled=not current_messages(),
         use_container_width=True,
     )
+with c_report:
+    if st.button("📋 Report", key="btn_gen_report", disabled=not current_messages(), use_container_width=True):
+        with st.spinner("Compiling diagnostic report..."):
+            convo = ss.conversations[ss.active_chat_id]
+            md_report = generate_diagnostic_markdown(convo["messages"])
+            pdf_bytes = build_diagnostic_pdf(md_report, convo["title"])
+            ss.diagnostic_report = {
+                "chat_id": ss.active_chat_id,
+                "markdown": md_report,
+                "pdf": pdf_bytes,
+                "generated_at": datetime.now().strftime("%I:%M %p"),
+            }
+        st.rerun()
 
 # ----------------------------------------------------------------- welcome screen
 messages = current_messages()
@@ -565,7 +739,28 @@ if not messages and ss.pending is None:
 # ----------------------------------------------------------------- chat history
 for m in messages:
     with st.chat_message(m["role"], avatar="🧑‍💻" if m["role"] == "user" else "🖥️"):
-        st.markdown(m["content"])
+        st.markdown(m["content"])     
+
+# ----------------------------------------------------------------- report preview
+if ss.diagnostic_report and ss.diagnostic_report.get("chat_id") == ss.active_chat_id:
+    with st.container(border=True):
+        r_head, r_dl, r_close = st.columns([3.5, 1.6, 0.7])
+        with r_head:
+            st.markdown(f"#### 📋 Smart Diagnostic Report  `{ss.diagnostic_report['generated_at']}`")
+        with r_dl:
+            st.download_button(
+                "⬇ Download PDF",
+                data=ss.diagnostic_report["pdf"],
+                file_name=f"TechBuddy_Diagnostic_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        with r_close:
+            if st.button("✕", key="close_report_preview", help="Close preview", use_container_width=True):
+                ss.diagnostic_report = None
+                st.rerun()
+        st.markdown("---")
+        st.markdown(ss.diagnostic_report["markdown"])
 
 # ----------------------------------------------------------------- input + response
 typed = st.chat_input("Describe your PC issue, temps, or part specs…")
